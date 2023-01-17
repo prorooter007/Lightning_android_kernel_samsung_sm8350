@@ -341,7 +341,12 @@ static int snd_pcm_update_hw_ptr0(struct snd_pcm_substream *substream,
 		 * the elapsed time to detect xruns.
 		 */
 		jdelta = curr_jiffies - runtime->hw_ptr_jiffies;
+#ifdef CONFIG_AUDIO_QGKI
+		if ((jdelta < runtime->hw_ptr_buffer_jiffies / 2) ||
+		    (runtime->hw_ptr_buffer_jiffies <= 0))
+#else
 		if (jdelta < runtime->hw_ptr_buffer_jiffies / 2)
+#endif
 			goto no_delta_check;
 		hdelta = jdelta - delta * HZ / runtime->rate;
 		xrun_threshold = runtime->hw_ptr_buffer_jiffies / 2 + 1;
@@ -1840,7 +1845,11 @@ static int wait_for_avail(struct snd_pcm_substream *substream,
 					 runtime->rate;
 				wait_time = max(t, wait_time);
 			}
+#if IS_ENABLED(CONFIG_SND_SOC_SAMSUNG_AUDIO)
+			wait_time = msecs_to_jiffies(wait_time * 100);
+#else
 			wait_time = msecs_to_jiffies(wait_time * 1000);
+#endif
 		}
 	}
 
@@ -2051,6 +2060,8 @@ static int pcm_sanity_check(struct snd_pcm_substream *substream)
 	struct snd_pcm_runtime *runtime;
 	if (PCM_RUNTIME_CHECK(substream))
 		return -ENXIO;
+	if (substream->hw_no_buffer)
+		snd_printd("%s: warning this PCM is host less\n", __func__);
 	runtime = substream->runtime;
 	if (snd_BUG_ON(!substream->ops->copy_user && !runtime->dma_area))
 		return -EINVAL;
@@ -2211,15 +2222,10 @@ snd_pcm_sframes_t __snd_pcm_lib_xfer(struct snd_pcm_substream *substream,
 			err = -EINVAL;
 			goto _end_unlock;
 		}
-		if (!atomic_inc_unless_negative(&runtime->buffer_accessing)) {
-			err = -EBUSY;
-			goto _end_unlock;
-		}
 		snd_pcm_stream_unlock_irq(substream);
 		err = writer(substream, appl_ofs, data, offset, frames,
 			     transfer);
 		snd_pcm_stream_lock_irq(substream);
-		atomic_dec(&runtime->buffer_accessing);
 		if (err < 0)
 			goto _end_unlock;
 		err = pcm_accessible_state(runtime);
