@@ -25,7 +25,6 @@
 #include <asm/debug-monitors.h>
 #include <asm/processor.h>
 #include <asm/thread_info.h>
-#include <asm/vectors.h>
 
 extern struct exception_table_entry __start___kvm_ex_table;
 extern struct exception_table_entry __stop___kvm_ex_table;
@@ -103,6 +102,18 @@ static void activate_traps_vhe(struct kvm_vcpu *vcpu)
 	val = read_sysreg(cpacr_el1);
 	val |= CPACR_EL1_TTA;
 	val &= ~CPACR_EL1_ZEN;
+
+	/*
+	 * With VHE (HCR.E2H == 1), accesses to CPACR_EL1 are routed to
+	 * CPTR_EL2. In general, CPACR_EL1 has the same layout as CPTR_EL2,
+	 * except for some missing controls, such as TAM.
+	 * In this case, CPTR_EL2.TAM has the same position with or without
+	 * VHE (HCR.E2H == 1) which allows us to use here the CPTR_EL2.TAM
+	 * shift value for trapping the AMU accesses.
+	 */
+
+	val |= CPTR_EL2_TAM;
+
 	if (update_fp_enabled(vcpu)) {
 		if (vcpu_has_sve(vcpu))
 			val |= CPACR_EL1_ZEN;
@@ -124,7 +135,7 @@ static void __hyp_text __activate_traps_nvhe(struct kvm_vcpu *vcpu)
 	__activate_traps_common(vcpu);
 
 	val = CPTR_EL2_DEFAULT;
-	val |= CPTR_EL2_TTA | CPTR_EL2_TZ;
+	val |= CPTR_EL2_TTA | CPTR_EL2_TZ | CPTR_EL2_TAM;
 	if (!update_fp_enabled(vcpu)) {
 		val |= CPTR_EL2_TFP;
 		__activate_traps_fpsimd32(vcpu);
@@ -153,7 +164,7 @@ static void __hyp_text __activate_traps(struct kvm_vcpu *vcpu)
 
 static void deactivate_traps_vhe(void)
 {
-	const char *host_vectors = vectors;
+	extern char vectors[];	/* kernel exception vectors */
 	write_sysreg(HCR_HOST_VHE_FLAGS, hcr_el2);
 
 	/*
@@ -164,10 +175,7 @@ static void deactivate_traps_vhe(void)
 	asm(ALTERNATIVE("nop", "isb", ARM64_WORKAROUND_1165522));
 
 	write_sysreg(CPACR_EL1_DEFAULT, cpacr_el1);
-
-	if (!arm64_kernel_unmapped_at_el0())
-		host_vectors = __this_cpu_read(this_cpu_vector);
-	write_sysreg(host_vectors, vbar_el1);
+	write_sysreg(vectors, vbar_el1);
 }
 NOKPROBE_SYMBOL(deactivate_traps_vhe);
 
