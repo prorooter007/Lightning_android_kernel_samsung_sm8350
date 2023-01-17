@@ -43,7 +43,7 @@ STD=`echo -e "\033[0m"`		# Text Clear
   
   echo "${BGREEN}***** Compiling kernel *****${STD}"
   [ ! -d "$OUT_DIR" ] && mkdir $OUT_DIR
-  make -j$(nproc) -C $(pwd) $KERNEL_MAKE_ENV lightning_exynos2100-r9sxxx_defconfig
+  make -j$(nproc) -C $(pwd) $KERNEL_MAKE_ENV lightning_r9q_defconfig
   make -j$(nproc) -C $(pwd) $KERNEL_MAKE_ENV
 
   [ -e "$(pwd)/arch/arm64/boot/Image.gz" ] && cp "$(pwd)/arch/arm64/boot/Image.gz" $OUT_DIR/Image.gz
