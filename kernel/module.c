@@ -55,6 +55,13 @@
 #include <linux/audit.h>
 #include <uapi/linux/module.h>
 #include "module-internal.h"
+#ifdef CONFIG_FASTUH_RKP
+#include <linux/rkp.h>
+#endif
+
+#ifdef CONFIG_SEC_DEBUG
+#include <linux/sec_debug.h>
+#endif
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/module.h>
@@ -155,6 +162,29 @@ static struct mod_tree_root {
 
 #define module_addr_min mod_tree.addr_min
 #define module_addr_max mod_tree.addr_max
+
+#ifdef CONFIG_SEC_DEBUG_MODULE_INFO
+void sec_debug_coreinfo_module(void)
+{
+	SUMMARY_COREINFO_SYMBOL(mod_tree);
+	SUMMARY_COREINFO_OFFSET(mod_tree_root, root);
+	SUMMARY_COREINFO_OFFSET(mod_tree_root, addr_min);
+	SUMMARY_COREINFO_OFFSET(mod_tree_root, addr_max);
+	SUMMARY_COREINFO_OFFSET(module_layout, base);
+	SUMMARY_COREINFO_OFFSET(module_layout, size);
+	SUMMARY_COREINFO_OFFSET(module_layout, text_size);
+	SUMMARY_COREINFO_OFFSET(module_layout, mtn);
+	SUMMARY_COREINFO_OFFSET(mod_tree_node, node);
+	SUMMARY_COREINFO_OFFSET(module, init_layout);
+	SUMMARY_COREINFO_OFFSET(module, core_layout);
+	SUMMARY_COREINFO_OFFSET(module, state);
+	SUMMARY_COREINFO_OFFSET(module, name);
+	SUMMARY_COREINFO_OFFSET(module, kallsyms);
+	SUMMARY_COREINFO_OFFSET(mod_kallsyms, symtab);
+	SUMMARY_COREINFO_OFFSET(mod_kallsyms, num_symtab);
+	SUMMARY_COREINFO_OFFSET(mod_kallsyms, strtab);
+}
+#endif
 
 static noinline void __mod_tree_insert(struct mod_tree_node *node)
 {
@@ -1086,7 +1116,6 @@ void __symbol_put(const char *symbol)
 	module_put(owner);
 	preempt_enable();
 }
-EXPORT_SYMBOL(__symbol_put);
 
 /* Note this assumes addr is a function, which it currently always is. */
 void symbol_put_addr(void *addr)
@@ -2236,9 +2265,22 @@ void __weak module_arch_freeing_init(struct module *mod)
 {
 }
 
+static void cfi_cleanup(struct module *mod);
+
 /* Free a module, remove from lists, etc. */
 static void free_module(struct module *mod)
 {
+#ifdef CONFIG_FASTUH_RKP
+	struct module_info rkp_mod_info;
+	rkp_mod_info.base_va = 0;
+	rkp_mod_info.vm_size = 0;
+	rkp_mod_info.core_base_va = (u64)mod->core_layout.base;
+	rkp_mod_info.core_text_size = (u64)mod->core_layout.text_size;
+	rkp_mod_info.core_ro_size = (u64)mod->core_layout.ro_size;
+	rkp_mod_info.init_base_va = (u64)mod->init_layout.base;
+	rkp_mod_info.init_text_size = (u64)mod->init_layout.text_size;
+	fastuh_call(FASTUH_APP_RKP, RKP_MODULE_LOAD, RKP_MODULE_PXN_SET, (u64)&rkp_mod_info, 1, 0);
+#endif
 	trace_module_free(mod);
 
 	mod_sysfs_teardown(mod);
@@ -2275,6 +2317,9 @@ static void free_module(struct module *mod)
 	synchronize_rcu();
 	mutex_unlock(&module_mutex);
 
+	/* Clean up CFI for the module. */
+	cfi_cleanup(mod);
+
 	/* This may be empty, but that's OK */
 	module_arch_freeing_init(mod);
 	module_memfree(mod->init_layout.base);
@@ -2284,6 +2329,10 @@ static void free_module(struct module *mod)
 	/* Free lock-classes; relies on the preceding sync_rcu(). */
 	lockdep_free_key_range(mod->core_layout.base, mod->core_layout.size);
 
+#ifdef CONFIG_DEBUG_MODULE_LOAD_INFO
+	pr_info("Unloaded %s: module core layout, start: 0x%pK size: 0x%x\n",
+		mod->name, mod->core_layout.base, mod->core_layout.size);
+#endif
 	/* Finally, free the core (containing the module structure) */
 	module_memfree(mod->core_layout.base);
 }
@@ -2301,7 +2350,6 @@ void *__symbol_get(const char *symbol)
 
 	return sym ? (void *)kernel_symbol_value(sym) : NULL;
 }
-EXPORT_SYMBOL_GPL(__symbol_get);
 
 /*
  * Ensure that an exported symbol [global namespace] does not already exist
@@ -3377,7 +3425,7 @@ static int find_module_sections(struct module *mod, struct load_info *info)
 #endif
 #ifdef CONFIG_FTRACE_MCOUNT_RECORD
 	/* sechdrs[0].sh_size is always zero */
-	mod->ftrace_callsites = section_objs(info, FTRACE_CALLSITE_SECTION,
+	mod->ftrace_callsites = section_objs(info, "__mcount_loc",
 					     sizeof(*mod->ftrace_callsites),
 					     &mod->num_ftrace_callsites);
 #endif
@@ -3624,6 +3672,8 @@ int __weak module_finalize(const Elf_Ehdr *hdr,
 	return 0;
 }
 
+static void cfi_init(struct module *mod);
+
 static int post_relocation(struct module *mod, const struct load_info *info)
 {
 	/* Sort exception table now relocations are done. */
@@ -3635,6 +3685,9 @@ static int post_relocation(struct module *mod, const struct load_info *info)
 
 	/* Setup kallsyms-specific fields. */
 	add_kallsyms(mod, info);
+
+	/* Setup CFI for the module. */
+	cfi_init(mod);
 
 	/* Arch-specific module finalizing. */
 	return module_finalize(info->hdr, info->sechdrs, mod);
@@ -3703,6 +3756,9 @@ static noinline int do_init_module(struct module *mod)
 {
 	int ret = 0;
 	struct mod_initfree *freeinit;
+#ifdef CONFIG_FASTUH_RKP
+	struct module_info rkp_mod_info;
+#endif
 
 	freeinit = kmalloc(sizeof(*freeinit), GFP_KERNEL);
 	if (!freeinit) {
@@ -3710,6 +3766,12 @@ static noinline int do_init_module(struct module *mod)
 		goto fail;
 	}
 	freeinit->module_init = mod->init_layout.base;
+
+	/*
+	 * We want to find out whether @mod uses async during init.  Clear
+	 * PF_USED_ASYNC.  async_schedule*() will set it.
+	 */
+	current->flags &= ~PF_USED_ASYNC;
 
 	do_mod_ctors(mod);
 	/* Start the module */
@@ -3736,13 +3798,22 @@ static noinline int do_init_module(struct module *mod)
 
 	/*
 	 * We need to finish all async code before the module init sequence
-	 * is done. This has potential to deadlock if synchronous module
-	 * loading is requested from async (which is not allowed!).
+	 * is done.  This has potential to deadlock.  For example, a newly
+	 * detected block device can trigger request_module() of the
+	 * default iosched from async probing task.  Once userland helper
+	 * reaches here, async_synchronize_full() will wait on the async
+	 * task waiting on request_module() and deadlock.
 	 *
-	 * See commit 0fdff3ec6d87 ("async, kmod: warn on synchronous
-	 * request_module() from async workers") for more details.
+	 * This deadlock is avoided by perfomring async_synchronize_full()
+	 * iff module init queued any async jobs.  This isn't a full
+	 * solution as it will deadlock the same if module loading from
+	 * async jobs nests more than once; however, due to the various
+	 * constraints, this hack seems to be the best option for now.
+	 * Please refer to the following thread for details.
+	 *
+	 * http://thread.gmane.org/gmane.linux.kernel/1420814
 	 */
-	if (!mod->async_probe_requested)
+	if (!mod->async_probe_requested && (current->flags & PF_USED_ASYNC))
 		async_synchronize_full();
 
 	ftrace_free_mem(mod, mod->init_layout.base, mod->init_layout.base +
@@ -3758,6 +3829,16 @@ static noinline int do_init_module(struct module *mod)
 	module_enable_ro(mod, true);
 	mod_tree_remove_init(mod);
 	module_arch_freeing_init(mod);
+#ifdef CONFIG_FASTUH_RKP
+	rkp_mod_info.base_va = 0;
+	rkp_mod_info.vm_size = 0;
+	rkp_mod_info.core_base_va = (u64)mod->core_layout.base;
+	rkp_mod_info.core_text_size = (u64)mod->core_layout.text_size;
+	rkp_mod_info.core_ro_size = (u64)mod->core_layout.ro_size;
+	rkp_mod_info.init_base_va = (u64)mod->init_layout.base;
+	rkp_mod_info.init_text_size = (u64)mod->init_layout.text_size;
+	fastuh_call(FASTUH_APP_RKP, RKP_MODULE_LOAD, RKP_MODULE_PXN_SET, (u64)&rkp_mod_info, 0, 0);
+#endif
 	mod->init_layout.base = NULL;
 	mod->init_layout.size = 0;
 	mod->init_layout.ro_size = 0;
@@ -3850,6 +3931,9 @@ out_unlocked:
 static int complete_formation(struct module *mod, struct load_info *info)
 {
 	int err;
+#ifdef CONFIG_FASTUH_RKP
+	struct module_info rkp_mod_info;
+#endif
 
 	mutex_lock(&module_mutex);
 
@@ -3868,6 +3952,16 @@ static int complete_formation(struct module *mod, struct load_info *info)
 	/* Mark state as coming so strong_try_module_get() ignores us,
 	 * but kallsyms etc. can see us. */
 	mod->state = MODULE_STATE_COMING;
+#ifdef CONFIG_FASTUH_RKP
+	rkp_mod_info.base_va = 0;
+	rkp_mod_info.vm_size = 0;
+	rkp_mod_info.core_base_va = (u64)mod->core_layout.base;
+	rkp_mod_info.core_text_size = (u64)mod->core_layout.text_size;
+	rkp_mod_info.core_ro_size = (u64)mod->core_layout.ro_size;
+	rkp_mod_info.init_base_va = (u64)mod->init_layout.base;
+	rkp_mod_info.init_text_size = (u64)mod->init_layout.text_size;
+	fastuh_call(FASTUH_APP_RKP, RKP_MODULE_LOAD, RKP_MODULE_PXN_CLEAR, (u64)&rkp_mod_info, 0, 0);
+#endif
 	mutex_unlock(&module_mutex);
 
 	return 0;
@@ -3917,6 +4011,10 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	struct module *mod;
 	long err = 0;
 	char *after_dashes;
+
+#ifdef CONFIG_FASTUH_RKP
+	struct module_info rkp_mod_info;
+#endif
 
 	/*
 	 * Do the signature check (if any) first. All that
@@ -4102,7 +4200,20 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	module_bug_cleanup(mod);
 	mutex_unlock(&module_mutex);
 
+#ifdef CONFIG_FASTUH_RKP
+    rkp_mod_info.base_va = 0;
+    rkp_mod_info.vm_size = 0;
+    rkp_mod_info.core_base_va = (u64)mod->core_layout.base;
+    rkp_mod_info.core_text_size = (u64)mod->core_layout.text_size;
+    rkp_mod_info.core_ro_size = (u64)mod->core_layout.ro_size;
+    rkp_mod_info.init_base_va = (u64)mod->init_layout.base;
+    rkp_mod_info.init_text_size = (u64)mod->init_layout.text_size;
+    fastuh_call(FASTUH_APP_RKP, RKP_MODULE_LOAD, RKP_MODULE_PXN_SET, (u64)&rkp_mod_info, 0, 0);
+#endif
+
  ddebug_cleanup:
+	/* Clean up CFI for the module. */
+	cfi_cleanup(mod);
 	ftrace_release_mod(mod);
 	dynamic_debug_remove(mod, info->debug);
 	synchronize_rcu();
@@ -4445,6 +4556,24 @@ int module_kallsyms_on_each_symbol(int (*fn)(void *, const char *,
 	return 0;
 }
 #endif /* CONFIG_KALLSYMS */
+
+static void cfi_init(struct module *mod)
+{
+#ifdef CONFIG_CFI_CLANG
+	rcu_read_lock_sched();
+	mod->cfi_check = (cfi_check_fn)find_kallsyms_symbol_value(mod,
+						CFI_CHECK_FN_NAME);
+	rcu_read_unlock_sched();
+	cfi_module_add(mod, module_addr_min, module_addr_max);
+#endif
+}
+
+static void cfi_cleanup(struct module *mod)
+{
+#ifdef CONFIG_CFI_CLANG
+	cfi_module_remove(mod, module_addr_min, module_addr_max);
+#endif
+}
 
 /* Maximum number of characters written by module_flags() */
 #define MODULE_FLAGS_BUF_SIZE (TAINT_FLAGS_COUNT + 4)
