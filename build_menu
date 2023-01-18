@@ -50,7 +50,7 @@ STD=`echo -e "\033[0m"`		# Text Clear
   if [ -e out/arch/arm64/boot/Image ]; then
     cp out/arch/arm64/boot/Image $OUT_DIR/Image
 
-    DTBO_FILES=$(find ${DTS_DIR}/samsung/ -name $r9q_*_w00_r*.dtbo)
+    DTBO_FILES=$(find ${DTS_DIR}/samsung/ -name $r9q_eur_openx_w00_r*.dtbo)
     cat ${DTS_DIR}/vendor/qcom/*.dtb > $(pwd)/out/dtb.img
     $(pwd)/tools/mkdtimg create $(pwd)/out/dtbo.img --page_size=4096 ${DTBO_FILES}
 
@@ -61,7 +61,7 @@ STD=`echo -e "\033[0m"`		# Text Clear
     cd "$(pwd)/AnyKernel3"
     git reset --hard
     cp $IMAGE zImage
-    cp $OUT_DIR/dtbo.img dtbo.img
+    
     sed -i "s/ExampleKernel by osm0sis/r9q Lightning kernel by prorooter007/g" anykernel.sh
     sed -i "s/=maguro/=r9q/g" anykernel.sh
     sed -i "s/=toroplus/=/g" anykernel.sh
