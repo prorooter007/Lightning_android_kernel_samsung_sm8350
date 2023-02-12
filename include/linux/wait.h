@@ -216,6 +216,7 @@ void __wake_up_pollfree(struct wait_queue_head *wq_head);
 #define wake_up_interruptible_nr(x, nr)	__wake_up(x, TASK_INTERRUPTIBLE, nr, NULL)
 #define wake_up_interruptible_all(x)	__wake_up(x, TASK_INTERRUPTIBLE, 0, NULL)
 #define wake_up_interruptible_sync(x)	__wake_up_sync((x), TASK_INTERRUPTIBLE, 1)
+#define wake_up_sync(x)			__wake_up_sync(x, TASK_NORMAL, 1)
 
 /*
  * Wakeup macros to be used to report events to the targets.
@@ -529,11 +530,10 @@ do {										\
 										\
 	hrtimer_init_sleeper_on_stack(&__t, CLOCK_MONOTONIC,			\
 				      HRTIMER_MODE_REL);			\
-	if ((timeout) != KTIME_MAX) {						\
-		hrtimer_set_expires_range_ns(&__t.timer, timeout,		\
-					current->timer_slack_ns);		\
-		hrtimer_sleeper_start_expires(&__t, HRTIMER_MODE_REL);		\
-	}									\
+	if ((timeout) != KTIME_MAX)						\
+		hrtimer_start_range_ns(&__t.timer, timeout,			\
+				       current->timer_slack_ns,			\
+				       HRTIMER_MODE_REL);			\
 										\
 	__ret = ___wait_event(wq_head, condition, state, 0, 0,			\
 		if (!__t.task) {						\
