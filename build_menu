@@ -16,7 +16,7 @@ echo "Done"
 KERNEL_DIR=$(pwd)
 OUT_DIR="$(pwd)/out"
 REPACK_DIR="${KERNEL_DIR}/AnyKernel3"
-IMAGE="${KERNEL_DIR}/out/arch/arm64/boot/Image"
+IMAGE="${KERNEL_DIR}/out/arch/arm64/boot/Image.gz"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 
 CHIPSET_NAME=lahaina
@@ -57,7 +57,7 @@ STD=`echo -e "\033[0m"`		# Text Clear
     echo "${BGREEN}***** Ready to Roar *****${STD}"
   fi
 
-  if [ -e "$(pwd)/out/arch/arm64/boot/Image" ]; then
+  if [ -e "$(pwd)/out/arch/arm64/boot/Image.gz" ]; then
     cd "$(pwd)/AnyKernel3"
     git reset --hard
     cp $IMAGE zImage
