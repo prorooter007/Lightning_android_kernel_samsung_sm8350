@@ -61,7 +61,8 @@ STD=`echo -e "\033[0m"`		# Text Clear
     cd "$(pwd)/AnyKernel3"
     git reset --hard
     cp $IMAGE zImage
-    
+    cp $OUT_DIR/dtbo.img dtbo.img
+
     sed -i "s/ExampleKernel by osm0sis/r9q Lightning kernel by prorooter007/g" anykernel.sh
     sed -i "s/=maguro/=r9q/g" anykernel.sh
     sed -i "s/=toroplus/=/g" anykernel.sh
