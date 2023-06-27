@@ -16,18 +16,18 @@ echo "Done"
 KERNEL_DIR=$(pwd)
 OUT_DIR="$(pwd)/out"
 REPACK_DIR="${KERNEL_DIR}/AnyKernel3"
-IMAGE="${KERNEL_DIR}/out/arch/arm64/boot/Image"
+IMAGE="${KERNEL_DIR}/out/arch/arm64/boot/Image.gz"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 
 CHIPSET_NAME=lahaina
 export ARCH=arm64
-export PLATFORM_VERSION=11
-export ANDROID_MAJOR_VERSION=r
+export PLATFORM_VERSION=13
+export ANDROID_MAJOR_VERSION=t
 
 BUILD_CROSS_COMPILE="$(pwd)/aarch64-linux-android-4.9/bin/aarch64-linux-android-"
 KERNEL_LLVM_BIN="$(pwd)/clang-r383902/bin/clang"
 CLANG_TRIPLE="$(pwd)/clang-r383902/bin/aarch64-linux-gnu-"
-KERNEL_MAKE_ENV="LOCALVERSION=-Lightning-V2.5"
+KERNEL_MAKE_ENV="LOCALVERSION=-Lightning-V3.0"
 
 DTS_DIR="$(pwd)/out/arch/arm64/boot/dts"
 
@@ -40,7 +40,7 @@ UNDER_LINE=`echo -e "\e[4m"`	# Text Under Line
 STD=`echo -e "\033[0m"`		# Text Clear
  
 
-
+build_kernel(){
  echo "${BGREEN}***** Compiling kernel *****${STD}"
   [ ! -d "out" ] && mkdir out
   make -j$(nproc) -C $(pwd) O=$(pwd)/out $KERNEL_MAKE_ENV ARCH=arm64 CROSS_COMPILE=$BUILD_CROSS_COMPILE REAL_CC=$KERNEL_LLVM_BIN CLANG_TRIPLE=$CLANG_TRIPLE CONFIG_SECTION_MISMATCH_WARN_ONLY=y vendor/lightning_r9q_defconfig
@@ -54,10 +54,47 @@ STD=`echo -e "\033[0m"`		# Text Clear
     cat ${DTS_DIR}/vendor/qcom/*.dtb > $(pwd)/out/dtb.img
     $(pwd)/tools/mkdtimg create $(pwd)/out/dtbo.img --page_size=4096 ${DTBO_FILES}
 
-    echo "${BGREEN}***** Ready to Roar *****${STD}"
+    echo "${BGREEN}***** Ready to Roar kernel *****${STD}"
   fi
+}
 
+install-kernel-modules(){
+    [ -d "$2" ] && rm -rf $2
+    mkdir -p $2
+    sed -e 's/\(.*kernel.*\):/\/\1:/g' -e 's/ \([^ ]*kernel[^ ]*\)/ \/\1/g' $1/modules.dep > $2/modules.dep
+    cp $1/modules.softdep $2
+    cp $1/modules.alias $2
+    for MOD in $modules; do
+        MODULE="$(basename $MOD)"
+        sed -i "s|\(.*kernel.*\)\/$MODULE:|/lib/modules/$MODULE:|" $2/modules.dep
+        sed -i "s| \([^ ]*kernel.*\)\/$MODULE| /lib/modules/$MODULE|" $2/modules.dep
+        basename $MOD >> $2/modules.load;
+        cp $MOD $2
+    done
+}
+
+build_kernel_modules(){
   if [ -e "$(pwd)/out/arch/arm64/boot/Image" ]; then
+    # Build modules
+    echo "${BGREEN}***** Installing Kernel Modules *****${STD}"
+    [ ! -d "out/tmp_modules" ] && mkdir -p out/tmp_modules
+    make -j$(nproc) -C $(pwd) O=$(pwd)/out $KERNEL_MAKE_ENV ARCH=arm64 CROSS_COMPILE=$BUILD_CROSS_COMPILE REAL_CC=$KERNEL_LLVM_BIN CLANG_TRIPLE=$CLANG_TRIPLE CONFIG_SECTION_MISMATCH_WARN_ONLY=y modules
+    make -j$(nproc) -C $(pwd) O=$(pwd)/out $KERNEL_MAKE_ENV ARCH=arm64 CROSS_COMPILE=$BUILD_CROSS_COMPILE REAL_CC=$KERNEL_LLVM_BIN CLANG_TRIPLE=$CLANG_TRIPLE CONFIG_SECTION_MISMATCH_WARN_ONLY=y INSTALL_MOD_STRIP=1 INSTALL_MOD_PATH=$(pwd)/out/tmp_modules modules_install
+
+    kernel_release=$(cat out/include/config/kernel.release)
+    kernel_modules_dir=$(pwd)/out/tmp_modules/lib/modules/$kernel_release
+    kernel_modules_out=$(pwd)/out/lib/modules
+    modules=$(find $kernel_modules_dir -type f -name '*.ko');
+
+    install-kernel-modules $kernel_modules_dir $kernel_modules_out
+    [ -d "out/tmp_modules" ] && rm -rf out/tmp_modules
+    echo "${BGREEN}***** Ready to Roar module*****${STD}"
+  fi
+}
+
+anykernel3(){
+
+  if [ -e "$(pwd)/out/arch/arm64/boot/Image.gz" ]; then
     cd "$(pwd)/AnyKernel3"
     git reset --hard
     cp $IMAGE zImage
@@ -78,3 +115,9 @@ STD=`echo -e "\033[0m"`		# Text Clear
     
     curl https://bashupload.com/$REPACK_DIR/r9q_lightning_kernel_.zip --data-binary @$REPACK_DIR/r9q_lightning_kernel_.zip
   fi
+}
+
+
+build_kernel
+build_kernel_modules
+anykernel3
